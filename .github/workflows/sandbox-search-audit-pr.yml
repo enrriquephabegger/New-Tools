@@ -1,0 +1,225 @@
+name: Habegger Sandbox Search Audit PR
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Test sandbox search API
+        shell: bash
+        env:
+          BASE_URL: https://habegger.sb2.netsuitedev.com
+        run: |
+          set -euo pipefail
+          mkdir -p audit-results
+          python3 - <<'PY'
+          import csv, html, json, os, re, ssl, statistics, time
+          import urllib.parse, urllib.request
+          from pathlib import Path
+
+          BASE = os.environ['BASE_URL'].rstrip('/')
+          OUT = Path('audit-results')
+          UA = 'Mozilla/5.0 (compatible; Habegger-Sandbox-Search-Audit/1.0)'
+
+          tests = [
+            ('exact','EB-STATE7IBR-01','EB-STATE7IBR-01'),
+            ('prefixless','STATE7IBR-01','EB-STATE7IBR-01'),
+            ('exact','HW-TH8321WF1001','HW-TH8321WF1001'),
+            ('prefixless','TH8321WF1001','HW-TH8321WF1001'),
+            ('exact','KFFEH0501N05','KFFEH0501N05'),
+            ('exact','235SAN03000A','235SAN03000A'),
+            ('exact','CA-437188','CA-437188'),
+            ('prefixless','437188','CA-437188'),
+            ('exact','FI-20X30X2','FI-20X30X2'),
+            ('prefixless','20X30X2','FI-20X30X2'),
+            ('exact','DV-MP18','DV-MP18'),
+            ('prefixless','MP18','DV-MP18'),
+            ('exact','00PPG000003100A','00PPG000003100A'),
+            ('generic','thermostat',''),
+            ('generic','ecobee thermostat',''),
+            ('expected','ecobee 7','EB-STATE7IBR-01'),
+            ('generic','honeywell wifi thermostat',''),
+            ('generic','3 heat 2 cool wifi thermostat',''),
+            ('generic','stat wire 18/8',''),
+            ('generic','thermostate',''),
+            ('generic','3 ton r454b heat pump',''),
+            ('expected','2.5 ton 14.3 seer2 heat pump','235SAN03000A'),
+            ('generic','5 ton 16 seer2 heat pump',''),
+            ('generic','3 ton r454b air conditioner',''),
+            ('generic','80 percent 90000 btu furnace',''),
+            ('generic','96 percent 60000 btu furnace',''),
+            ('generic','4 ton r454b fan coil',''),
+            ('generic','3 ton 17.5 inch evaporator coil',''),
+            ('generic','single zone mini split',''),
+            ('generic','multi zone mini split',''),
+            ('generic','rtu 5 ton',''),
+            ('generic','45 5 capacitor 440v',''),
+            ('generic','1/2 hp 1075 rpm condenser fan motor',''),
+            ('generic','3/4 hp 900 rpm blower motor',''),
+            ('generic','2 pole 40 amp contactor',''),
+            ('generic','24 volt 40 va transformer',''),
+            ('generic','3 ton r454b txv',''),
+            ('generic','thermostatic expansion valve',''),
+            ('generic','liquid line filter drier',''),
+            ('generic','filter dryer',''),
+            ('generic','hard start kit',''),
+            ('generic','furnace control board',''),
+            ('generic','hot surface ignitor',''),
+            ('generic','flame sensor',''),
+            ('generic','pressure switch',''),
+            ('generic','blower wheel',''),
+            ('generic','sequencer',''),
+            ('generic','3/8 x 7/8 line set 50 ft',''),
+            ('generic','lineset 50 foot',''),
+            ('generic','20x25x1 air filter',''),
+            ('generic','merv 8 16x25x1 filter',''),
+            ('generic','condensate pump 120v',''),
+            ('generic','coil cleaner gallon',''),
+            ('expected','tri power coil cleaner','CA-437188'),
+            ('generic','duct mastic tube',''),
+            ('expected','18x18 rubber equipment pad','DV-MP18'),
+            ('generic','60 amp disconnect',''),
+            ('generic','6 foot electrical whip',''),
+            ('generic','surge protector hvac',''),
+            ('generic','vacuum pump',''),
+            ('generic','refrigerant recovery machine',''),
+            ('generic','condensor fan motor',''),
+            ('generic','capicitor 45 5',''),
+            ('generic','igniter',''),
+            ('generic','air handler 3 ton',''),
+          ]
+
+          def clean(v): return re.sub(r'\s+', ' ', str(v or '')).strip()
+          def key(v): return re.sub(r'[^A-Z0-9]', '', clean(v).upper())
+
+          def flatten(v):
+              if v is None: return ''
+              if isinstance(v, list): return ' | '.join(filter(None, map(flatten, v)))
+              if isinstance(v, dict):
+                  for k in ('name','label','text','value'):
+                      if k in v and v[k] not in (None,''): return flatten(v[k])
+                  return ' | '.join(filter(None, map(flatten, v.values())))
+              return clean(v)
+
+          def first(item, names):
+              lower = {str(k).lower(): k for k in item}
+              for name in names:
+                  k = name if name in item else lower.get(name.lower())
+                  if k is not None and item[k] not in (None,''): return flatten(item[k])
+              return ''
+
+          def simplify(item):
+              return {
+                  'item': first(item, ('itemid','name','displayname','internalid')),
+                  'name': first(item, ('storedisplayname2','storedisplayname','displayname','itemid','name')),
+              }
+
+          def request_json(query):
+              variants = [
+                  {'q':query,'limit':24,'fieldset':'search'},
+                  {'q':query,'limit':24,'fieldset':'search','country':'US','currency':'USD','language':'en','include':'facets'},
+                  {'q':query,'limit':24,'fieldset':'search','country':'US','currency':'USD','language':'en','include':'facets','n':'2'},
+              ]
+              errors=[]
+              for params in variants:
+                  url=BASE+'/api/items?'+urllib.parse.urlencode(params)
+                  req=urllib.request.Request(url,headers={'Accept':'application/json,*/*','User-Agent':UA})
+                  started=time.perf_counter()
+                  try:
+                      with urllib.request.urlopen(req,timeout=30,context=ssl.create_default_context()) as resp:
+                          data=json.loads(resp.read().decode('utf-8','replace'))
+                          return data,round((time.perf_counter()-started)*1000),url
+                  except Exception as e:
+                      errors.append(f'{type(e).__name__}: {e}')
+              raise RuntimeError(' | '.join(errors))
+
+          def rank(items, expected):
+              target=key(expected)
+              if not target: return None
+              for i,item in enumerate(items,1):
+                  if target==key(item['item']) or target in key(item['item']) or target in key(item['name']): return i
+              return None
+
+          ui={}
+          try:
+              url=BASE+'/search?keywords=thermostat'
+              req=urllib.request.Request(url,headers={'Accept':'text/html,*/*','User-Agent':UA})
+              start=time.perf_counter()
+              with urllib.request.urlopen(req,timeout=30,context=ssl.create_default_context()) as resp:
+                  body=resp.read()
+                  ui={'status':resp.status,'final_url':resp.geturl(),'bytes':len(body),'ms':round((time.perf_counter()-start)*1000),'content_type':resp.headers.get('content-type','')}
+          except Exception as e:
+              ui={'status':'ERROR','error':f'{type(e).__name__}: {e}'}
+
+          rows=[]
+          for i,(kind,query,expected) in enumerate(tests,1):
+              row={'test':i,'type':kind,'query':query,'expected_item':expected,'status':'','total':'','rank':'','latency_ms':'','top_1_item':'','top_1_name':'','top_5_items':'','top_5_names':'','api_url':'','error':''}
+              try:
+                  data,ms,url=request_json(query)
+                  raw=data.get('items',[]) if isinstance(data,dict) else []
+                  items=[simplify(x) for x in raw if isinstance(x,dict)]
+                  try: total=int(float(data.get('total',len(items))))
+                  except Exception: total=len(items)
+                  found=rank(items,expected)
+                  if total==0: status='ZERO_RESULTS'
+                  elif expected:
+                      max_rank=1 if kind=='exact' else 5
+                      status='PASS' if found and found<=max_rank else 'FAIL'
+                  else: status='OBSERVE'
+                  row.update({'status':status,'total':total,'rank':found or '','latency_ms':ms,'top_1_item':items[0]['item'] if items else '','top_1_name':items[0]['name'] if items else '','top_5_items':' | '.join(x['item'] for x in items[:5]),'top_5_names':' | '.join(x['name'] for x in items[:5]),'api_url':url})
+              except Exception as e:
+                  row.update({'status':'ERROR','error':f'{type(e).__name__}: {e}'})
+              rows.append(row)
+              print(f"[{i:02d}/{len(tests)}] {row['status']:<12} {query} | total={row['total']} rank={row['rank']} | {row['top_1_item']} {row['top_1_name']}")
+              time.sleep(.2)
+
+          valid=[r for r in rows if r['status']!='ERROR']
+          exact=[r for r in rows if r['type']=='exact' and r['status']!='ERROR']
+          prefix=[r for r in rows if r['type']=='prefixless' and r['status']!='ERROR']
+          expected=[r for r in rows if r['expected_item'] and r['status']!='ERROR']
+          latency=[int(r['latency_ms']) for r in valid if str(r['latency_ms']).isdigit()]
+          summary={
+              'site':BASE,'ui_probe':ui,'queries':len(rows),'errors':sum(r['status']=='ERROR' for r in rows),
+              'zero_results':sum(r['status']=='ZERO_RESULTS' for r in rows),
+              'zero_result_rate':round(sum(r['status']=='ZERO_RESULTS' for r in rows)/len(valid),4) if valid else None,
+              'exact_sku_top1':round(sum(r['rank']==1 for r in exact)/len(exact),4) if exact else None,
+              'prefixless_top5':round(sum(bool(r['rank']) and int(r['rank'])<=5 for r in prefix)/len(prefix),4) if prefix else None,
+              'expected_item_top5':round(sum(bool(r['rank']) and int(r['rank'])<=5 for r in expected)/len(expected),4) if expected else None,
+              'median_latency_ms':round(statistics.median(latency)) if latency else None,
+              'p95_latency_ms':sorted(latency)[round(.95*(len(latency)-1))] if latency else None,
+              'passes':sum(r['status']=='PASS' for r in rows),'failures':sum(r['status']=='FAIL' for r in rows),'observations':sum(r['status']=='OBSERVE' for r in rows),
+          }
+
+          fields=list(rows[0])
+          for filename,selected in [('search-results.csv',rows),('failures.csv',[r for r in rows if r['status'] in ('FAIL','ZERO_RESULTS','ERROR')])]:
+              with (OUT/filename).open('w',encoding='utf-8-sig',newline='') as f:
+                  w=csv.DictWriter(f,fieldnames=fields); w.writeheader(); w.writerows(selected)
+          (OUT/'summary.json').write_text(json.dumps(summary,indent=2),encoding='utf-8')
+
+          table=''.join(f"<tr><td>{html.escape(r['status'])}</td><td>{html.escape(r['query'])}</td><td>{html.escape(str(r['total']))}</td><td>{html.escape(str(r['rank']))}</td><td>{html.escape(r['top_1_item'])}</td><td>{html.escape(r['top_1_name'])}</td><td>{html.escape(r['top_5_names'])}</td></tr>" for r in rows)
+          cards=''.join(f"<div><span>{html.escape(k.replace('_',' ').title())}</span><b>{html.escape(str(v))}</b></div>" for k,v in summary.items() if k not in ('site','ui_probe'))
+          (OUT/'dashboard.html').write_text(f'''<!doctype html><meta charset="utf-8"><title>Sandbox Search Audit</title><style>body{{font:14px Arial;margin:24px;color:#222}}h1{{color:#005DAA}}.cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}}.cards div{{border:1px solid #ddd;padding:12px;border-radius:8px}}.cards span{{display:block;color:#666}}.cards b{{font-size:22px}}table{{border-collapse:collapse;width:100%;margin-top:20px}}th,td{{border-bottom:1px solid #ddd;padding:7px;text-align:left;vertical-align:top}}th{{background:#eaf3fa;color:#005DAA}}</style><h1>Habegger Sandbox Search Audit</h1><p>{html.escape(BASE)}</p><div class="cards">{cards}</div><p><b>UI probe:</b> {html.escape(str(ui))}</p><table><thead><tr><th>Status</th><th>Query</th><th>Results</th><th>Expected rank</th><th>Top item</th><th>Top name</th><th>Top five</th></tr></thead><tbody>{table}</tbody></table>''',encoding='utf-8')
+
+          print('\n=== SUMMARY ===')
+          print(json.dumps(summary,indent=2))
+          print('\n=== FAILURES / ZERO RESULTS / ERRORS ===')
+          for r in rows:
+              if r['status'] in ('FAIL','ZERO_RESULTS','ERROR'):
+                  print(json.dumps(r,ensure_ascii=False))
+          PY
+
+      - name: Upload sandbox audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: habegger-sandbox-search-audit
+          path: audit-results/
+          retention-days: 14
