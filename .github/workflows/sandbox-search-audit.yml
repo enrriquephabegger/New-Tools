@@ -1,0 +1,381 @@
+name: Habegger Sandbox Search Audit
+
+on:
+  push:
+    branches:
+      - search-audit-sandbox-20260901
+    paths:
+      - .github/workflows/sandbox-search-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SANDBOX_BASE_URL: https://habegger.sb2.netsuitedev.com
+    steps:
+      - name: Run controlled anonymous search tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p audit-results
+          cat > /tmp/queries.csv <<'CSV'
+          query_id,query,query_type,expected_item,expected_category,priority,notes
+          sku-001,EB-STATE7IBR-01,exact_sku,EB-STATE7IBR-01,Programmable Thermostats,Critical,Bryant Ecobee item with vendor prefix
+          sku-002,STATE7IBR-01,sku_without_prefix,EB-STATE7IBR-01,Programmable Thermostats,Critical,Manufacturer part number without EB prefix
+          sku-003,HW-TH8321WF1001,exact_sku,HW-TH8321WF1001,Wi-Fi Thermostats,Critical,Honeywell Wi-Fi thermostat exact item number
+          sku-004,TH8321WF1001,sku_without_prefix,HW-TH8321WF1001,Wi-Fi Thermostats,Critical,Manufacturer part number without HW prefix
+          sku-005,KFFEH0501N05,exact_sku,KFFEH0501N05,Electric Heaters,Critical,Carrier 5 kW heater exact item number
+          sku-006,235SAN03000A,exact_sku,235SAN03000A,Heat Pumps,Critical,Bryant 2.5 ton heat pump exact item number
+          sku-007,CA-437188,exact_sku,CA-437188,Coil Cleaners,Critical,Nu-Calgon coil cleaner exact internal item number
+          sku-008,437188,sku_without_prefix,CA-437188,Coil Cleaners,High,Supplier number without CA prefix
+          sku-009,FI-20X30X2,exact_sku,FI-20X30X2,Air Filters,Critical,Filter exact internal item number
+          sku-010,20X30X2,sku_without_prefix,FI-20X30X2,Air Filters,High,Common filter size or part number without FI prefix
+          sku-011,DV-MP18,exact_sku,DV-MP18,"Equipment Pads, Pump-ups & Covers",Critical,DiversiTech pad exact item number
+          sku-012,MP18,sku_without_prefix,DV-MP18,"Equipment Pads, Pump-ups & Covers",High,Supplier number without DV prefix
+          sku-013,00PPG000003100A,exact_sku,00PPG000003100A,Sensors & Switches,Critical,OEM flow switch item number
+          therm-001,ecobee thermostat,category,,Programmable Thermostats,High,Brand and product query
+          therm-002,ecobee 7,manual_item,EB-STATE7IBR-01,Programmable Thermostats,High,Alternate keyword query
+          therm-003,honeywell wifi thermostat,category,,Wi-Fi Thermostats,High,Brand plus category
+          therm-004,3 heat 2 cool wifi thermostat,category,,Wi-Fi Thermostats,High,Contractor specification query
+          therm-005,non programmable thermostat,category,,Non-Programmable Thermostats,Medium,Category wording
+          therm-006,thermostat guard,category,,Thermostat Guards and Wall Plates,Medium,Contractor wording
+          therm-007,stat wire 18/8,category,,Thermostat Wire,High,Contractor shorthand
+          therm-008,thermostate,observation,,,Low,Common thermostat misspelling
+          equip-001,3 ton r454b heat pump,category,,Heat Pumps,High,Product plus capacity and refrigerant
+          equip-002,2.5 ton 14.3 seer2 heat pump,manual_item,235SAN03000A,Heat Pumps,High,Expected Bryant model is one valid target
+          equip-003,5 ton 16 seer2 heat pump,category,,Heat Pumps,High,Product plus capacity and efficiency
+          equip-004,3 ton r454b air conditioner,category,,Air Conditioners,High,Product plus capacity and refrigerant
+          equip-005,80 percent 90000 btu furnace,category,,Gas Furnaces,High,Contractor capacity and efficiency query
+          equip-006,96 percent 60000 btu furnace,category,,Gas Furnaces,High,Contractor capacity and efficiency query
+          equip-007,4 ton r454b fan coil,category,,Fan Coils,High,Product plus capacity and refrigerant
+          equip-008,3 ton 17.5 inch evaporator coil,category,,Evaporator Coils,High,Product plus capacity and casing width
+          equip-009,single zone mini split,category,,Single-Zone Heat & Cool,High,Ductless synonym query
+          equip-010,multi zone mini split,category,,Multi-Zone Heat & Cool,High,Ductless synonym query
+          equip-011,rtu 5 ton,category,,Rooftop Units,Medium,Rooftop unit abbreviation
+          part-001,45 5 capacitor 440v,category,,Capacitors,High,Common dual run capacitor search
+          part-002,1/2 hp 1075 rpm condenser fan motor,category,,Condenser Fan Motors,High,Motor specification search
+          part-003,3/4 hp 900 rpm blower motor,category,,Direct Drive Blower Motors,High,Motor specification search
+          part-004,2 pole 40 amp contactor,category,,Contactors,High,Common contactor search
+          part-005,24 volt 40 va transformer,category,,Transformers,High,Common transformer search
+          part-006,3 ton r454b txv,category,,Expansion Valves,High,Abbreviation plus refrigerant and capacity
+          part-007,thermostatic expansion valve,category,,Expansion Valves,Medium,Expanded TXV term
+          part-008,liquid line filter drier,category,,Filter Driers,High,Common service part wording
+          part-009,filter dryer,category,,Filter Driers,High,Common spelling variant
+          part-010,hard start kit,category,,Hard Starts,High,Common contractor wording
+          part-011,furnace control board,category,,Control Boards,High,Contractor wording
+          part-012,hot surface ignitor,category,,Combustion Components & Valves,High,Common service part wording
+          part-013,flame sensor,category,,Combustion Components & Valves,High,Common service part wording
+          part-014,pressure switch,category,,Sensors & Switches,High,Common generic part query
+          part-015,blower wheel,category,,Blower Wheels,High,Common part query
+          part-016,sequencer,category,,Relays,Medium,Generic repair part query
+          supply-001,3/8 x 7/8 line set 50 ft,category,,Line Sets,High,Common line set dimensions
+          supply-002,mini split line set 1/4 x 3/8,category,,Mini-Split Line Sets,High,Ductless line set dimensions
+          supply-003,20x25x1 air filter,category,,Air Filters,High,Common filter size query
+          supply-004,merv 8 16x25x1 filter,category,,Air Filters,High,Filter performance and size
+          supply-005,condensate pump 120v,category,,Condensate Pumps,High,Common service and installation search
+          supply-006,condensate trap,category,,Condensate Traps,Medium,Category query
+          supply-007,coil cleaner gallon,category,,Coil Cleaners,Medium,Product and package size
+          supply-008,tri power coil cleaner,manual_item,CA-437188,Coil Cleaners,High,Alternate keyword query
+          supply-009,duct mastic tube,category,,"Sealant, Glue, Silicone & Cement",High,Contractor wording
+          supply-010,18x18 rubber equipment pad,manual_item,DV-MP18,"Equipment Pads, Pump-ups & Covers",High,Product dimensions
+          supply-011,60 amp disconnect,category,,Disconnects,High,Electrical installation material
+          supply-012,6 foot electrical whip,category,,Electrical Whips,High,Electrical installation material
+          supply-013,surge protector hvac,category,,Surge Protectors,Medium,Product and application
+          supply-014,roof curb,observation,,,Medium,Common RTU accessory query
+          supply-015,economizer,category,,Economizers,Medium,Commercial accessory query
+          supply-016,vacuum pump,category,,Vacuum Pumps,Medium,Service tool query
+          supply-017,refrigerant recovery machine,category,,Refrigerant Recovery Units,Medium,Service equipment wording
+          supply-018,nitrogen regulator,observation,,,Medium,Service tool query
+          supply-019,micron gauge,observation,,,Medium,Service tool query
+          miss-001,condensor fan motor,category,,Condenser Fan Motors,Medium,Common misspelling of condenser
+          miss-002,capicitor 45 5,category,,Capacitors,Medium,Common capacitor misspelling
+          miss-003,lineset 50 foot,category,,Line Sets,Medium,No space variant
+          miss-004,igniter,category,,Combustion Components & Valves,Medium,Alternate spelling versus ignitor
+          miss-005,air handler 3 ton,category,,Fan Coils,Medium,Common synonym for fan coil
+          CSV
+
+          python3 - <<'PY'
+          import csv
+          import html
+          import json
+          import os
+          import re
+          import ssl
+          import statistics
+          import time
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          BASE = os.environ.get('SANDBOX_BASE_URL', 'https://habegger.sb2.netsuitedev.com').rstrip('/')
+          OUT = Path('audit-results')
+          OUT.mkdir(exist_ok=True)
+          USER_AGENT = 'Mozilla/5.0 (compatible; Habegger-Sandbox-Search-Audit/1.0; +https://www.habeggercorp.com)'
+
+          def compact(value):
+              return re.sub(r'\s+', ' ', str(value or '')).strip()
+
+          def part_key(value):
+              return re.sub(r'[^A-Z0-9]', '', compact(value).upper())
+
+          def normalize(value):
+              return re.sub(r'[^a-z0-9]+', ' ', compact(value).lower()).strip()
+
+          def flatten(value):
+              if value is None:
+                  return ''
+              if isinstance(value, list):
+                  return ' | '.join(filter(None, (flatten(v) for v in value)))
+              if isinstance(value, dict):
+                  for key in ('name', 'label', 'text', 'value'):
+                      if key in value and value[key] not in (None, ''):
+                          return flatten(value[key])
+                  return ' | '.join(filter(None, (flatten(v) for v in value.values())))
+              return compact(value)
+
+          def find_first(record, names):
+              for name in names:
+                  if name in record and record[name] not in (None, ''):
+                      return flatten(record[name])
+              lowered = {str(k).lower(): k for k in record}
+              for name in names:
+                  key = lowered.get(name.lower())
+                  if key is not None and record[key] not in (None, ''):
+                      return flatten(record[key])
+              return ''
+
+          def recursive_values_for_keys(value, fragments):
+              found = []
+              if isinstance(value, dict):
+                  for key, child in value.items():
+                      lower = str(key).lower()
+                      if any(fragment in lower for fragment in fragments):
+                          text = flatten(child)
+                          if text:
+                              found.append(text)
+                      found.extend(recursive_values_for_keys(child, fragments))
+              elif isinstance(value, list):
+                  for child in value:
+                      found.extend(recursive_values_for_keys(child, fragments))
+              return found
+
+          def simplify(item):
+              item_id = find_first(item, ('itemid', 'itemId', 'name', 'displayname', 'internalid'))
+              display_name = find_first(item, ('storedisplayname2', 'storedisplayname', 'displayname', 'itemid', 'name'))
+              category_values = recursive_values_for_keys(item, ('category', 'product_category', 'productcategory'))
+              brand_values = recursive_values_for_keys(item, ('brand', 'manufacturer'))
+              return {
+                  'item_id': item_id,
+                  'display_name': display_name,
+                  'category': ' | '.join(dict.fromkeys(category_values)),
+                  'brand': ' | '.join(dict.fromkeys(brand_values)),
+              }
+
+          def get_json(query):
+              variants = [
+                  {'q': query, 'limit': 24, 'fieldset': 'search'},
+                  {'q': query, 'limit': 24, 'fieldset': 'search', 'country': 'US', 'currency': 'USD', 'language': 'en', 'include': 'facets'},
+                  {'q': query, 'limit': 24, 'fieldset': 'search', 'country': 'US', 'currency': 'USD', 'language': 'en', 'include': 'facets', 'n': 2},
+              ]
+              errors = []
+              for params in variants:
+                  url = BASE + '/api/items?' + urllib.parse.urlencode(params)
+                  request = urllib.request.Request(url, headers={
+                      'Accept': 'application/json,text/plain,*/*',
+                      'User-Agent': USER_AGENT,
+                  })
+                  started = time.perf_counter()
+                  try:
+                      with urllib.request.urlopen(request, timeout=30, context=ssl.create_default_context()) as response:
+                          body = response.read().decode('utf-8', errors='replace')
+                          elapsed = round((time.perf_counter() - started) * 1000)
+                          data = json.loads(body)
+                          return data, elapsed, url
+                  except Exception as exc:
+                      errors.append(f'{type(exc).__name__}: {exc}')
+              raise RuntimeError(' | '.join(errors))
+
+          def expected_rank(items, expected):
+              target = part_key(expected)
+              if not target:
+                  return None
+              for index, item in enumerate(items, 1):
+                  values = [item.get('item_id', ''), item.get('display_name', '')]
+                  if any(part_key(value) == target or target in part_key(value) for value in values):
+                      return index
+              return None
+
+          def category_precision(items, expected, limit=5):
+              if not expected:
+                  return None
+              candidate = items[:limit]
+              with_data = [item for item in candidate if item.get('category')]
+              if not with_data:
+                  return None
+              target = normalize(expected)
+              matches = 0
+              for item in with_data:
+                  actual = normalize(item.get('category'))
+                  if actual == target or actual in target or target in actual:
+                      matches += 1
+              return matches / len(with_data)
+
+          ui_probe = {'url': BASE + '/search?keywords=thermostat', 'status': '', 'final_url': '', 'content_type': '', 'bytes': 0, 'elapsed_ms': ''}
+          try:
+              req = urllib.request.Request(ui_probe['url'], headers={'User-Agent': USER_AGENT, 'Accept': 'text/html,*/*'})
+              started = time.perf_counter()
+              with urllib.request.urlopen(req, timeout=30, context=ssl.create_default_context()) as response:
+                  body = response.read()
+                  ui_probe.update({
+                      'status': response.status,
+                      'final_url': response.geturl(),
+                      'content_type': response.headers.get('content-type', ''),
+                      'bytes': len(body),
+                      'elapsed_ms': round((time.perf_counter() - started) * 1000),
+                  })
+          except Exception as exc:
+              ui_probe['status'] = 'ERROR'
+              ui_probe['error'] = f'{type(exc).__name__}: {exc}'
+
+          with open('/tmp/queries.csv', encoding='utf-8-sig', newline='') as handle:
+              queries = list(csv.DictReader(handle))
+
+          results = []
+          first_response_keys = []
+          for index, test in enumerate(queries, 1):
+              query = compact(test['query'])
+              row = dict(test)
+              row.update({
+                  'status': '', 'total_results': '', 'expected_rank': '', 'category_precision_at_5': '',
+                  'response_time_ms': '', 'top_1_item': '', 'top_1_name': '', 'top_5_items': '',
+                  'top_5_names': '', 'api_url': '', 'error': ''
+              })
+              try:
+                  payload, elapsed, api_url = get_json(query)
+                  if not first_response_keys and isinstance(payload, dict):
+                      first_response_keys = sorted(payload.keys())
+                  raw_items = payload.get('items', []) if isinstance(payload, dict) else []
+                  items = [simplify(item) for item in raw_items if isinstance(item, dict)]
+                  total_raw = payload.get('total', len(items)) if isinstance(payload, dict) else len(items)
+                  try:
+                      total = int(float(total_raw))
+                  except Exception:
+                      total = len(items)
+                  rank = expected_rank(items, test.get('expected_item', ''))
+                  precision = category_precision(items, test.get('expected_category', ''))
+                  test_type = test.get('query_type', '')
+                  if total == 0:
+                      status = 'ZERO_RESULTS'
+                  elif test.get('expected_item'):
+                      max_rank = 1 if test_type == 'exact_sku' else 5
+                      status = 'PASS' if rank is not None and rank <= max_rank else 'FAIL'
+                  elif test.get('expected_category') and precision is not None:
+                      status = 'PASS' if precision >= 0.6 else 'FAIL'
+                  else:
+                      status = 'OBSERVE'
+                  row.update({
+                      'status': status,
+                      'total_results': total,
+                      'expected_rank': rank or '',
+                      'category_precision_at_5': '' if precision is None else round(precision, 3),
+                      'response_time_ms': elapsed,
+                      'top_1_item': items[0]['item_id'] if items else '',
+                      'top_1_name': items[0]['display_name'] if items else '',
+                      'top_5_items': ' | '.join(item['item_id'] for item in items[:5] if item['item_id']),
+                      'top_5_names': ' | '.join(item['display_name'] for item in items[:5] if item['display_name']),
+                      'api_url': api_url,
+                  })
+              except Exception as exc:
+                  row['status'] = 'ERROR'
+                  row['error'] = f'{type(exc).__name__}: {exc}'
+              results.append(row)
+              print(f"[{index:02d}/{len(queries)}] {row['status']:<12} {query} | total={row['total_results']} rank={row['expected_rank']} top={row['top_1_item']} {row['top_1_name']}")
+              time.sleep(0.25)
+
+          latencies = [int(row['response_time_ms']) for row in results if str(row['response_time_ms']).isdigit()]
+          expected_rows = [row for row in results if row.get('expected_item') and row['status'] != 'ERROR']
+          exact_rows = [row for row in expected_rows if row['query_type'] == 'exact_sku']
+          prefix_rows = [row for row in expected_rows if row['query_type'] == 'sku_without_prefix']
+          non_error_rows = [row for row in results if row['status'] != 'ERROR']
+          summary = {
+              'site': BASE,
+              'ui_probe': ui_probe,
+              'queries': len(results),
+              'request_errors': sum(row['status'] == 'ERROR' for row in results),
+              'passes': sum(row['status'] == 'PASS' for row in results),
+              'failures': sum(row['status'] == 'FAIL' for row in results),
+              'observations': sum(row['status'] == 'OBSERVE' for row in results),
+              'zero_results': sum(row['status'] == 'ZERO_RESULTS' for row in results),
+              'zero_result_rate': round(sum(row['status'] == 'ZERO_RESULTS' for row in results) / len(non_error_rows), 4) if non_error_rows else None,
+              'exact_sku_top_1_rate': round(sum(row['expected_rank'] == 1 for row in exact_rows) / len(exact_rows), 4) if exact_rows else None,
+              'unprefixed_top_5_rate': round(sum(bool(row['expected_rank']) and int(row['expected_rank']) <= 5 for row in prefix_rows) / len(prefix_rows), 4) if prefix_rows else None,
+              'all_expected_item_top_5_rate': round(sum(bool(row['expected_rank']) and int(row['expected_rank']) <= 5 for row in expected_rows) / len(expected_rows), 4) if expected_rows else None,
+              'median_latency_ms': round(statistics.median(latencies)) if latencies else None,
+              'p95_latency_ms': sorted(latencies)[max(0, min(len(latencies)-1, int(round(0.95 * (len(latencies)-1)))))] if latencies else None,
+              'first_response_keys': first_response_keys,
+          }
+
+          fieldnames = list(results[0].keys()) if results else []
+          with open(OUT / 'search-results.csv', 'w', encoding='utf-8-sig', newline='') as handle:
+              writer = csv.DictWriter(handle, fieldnames=fieldnames)
+              writer.writeheader()
+              writer.writerows(results)
+          with open(OUT / 'summary.json', 'w', encoding='utf-8') as handle:
+              json.dump(summary, handle, indent=2)
+          with open(OUT / 'failures.csv', 'w', encoding='utf-8-sig', newline='') as handle:
+              writer = csv.DictWriter(handle, fieldnames=fieldnames)
+              writer.writeheader()
+              writer.writerows([row for row in results if row['status'] in ('FAIL', 'ZERO_RESULTS', 'ERROR')])
+
+          def pct(value):
+              return 'N/A' if value is None else f'{value * 100:.1f}%'
+
+          rows_html = []
+          for row in results:
+              cls = 'bad' if row['status'] in ('FAIL', 'ZERO_RESULTS', 'ERROR') else 'good' if row['status'] == 'PASS' else 'observe'
+              rows_html.append(
+                  '<tr>'
+                  f"<td class='{cls}'>{html.escape(row['status'])}</td>"
+                  f"<td>{html.escape(row['query'])}</td>"
+                  f"<td>{html.escape(row['query_type'])}</td>"
+                  f"<td>{html.escape(row.get('expected_item') or row.get('expected_category') or '')}</td>"
+                  f"<td>{html.escape(str(row['total_results']))}</td>"
+                  f"<td>{html.escape(str(row['expected_rank']))}</td>"
+                  f"<td>{html.escape(row['top_1_item'])}</td>"
+                  f"<td>{html.escape(row['top_1_name'])}</td>"
+                  f"<td>{html.escape(row['top_5_names'])}</td>"
+                  '</tr>'
+              )
+
+          dashboard = f'''<!doctype html><html><head><meta charset="utf-8"><title>Habegger Sandbox Search Audit</title>
+          <style>body{{font:14px Arial,sans-serif;margin:28px;color:#222}}h1{{color:#005DAA}}.cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:20px 0}}.card{{border:1px solid #ddd;border-radius:8px;padding:14px}}.card b{{display:block;font-size:22px;margin-top:4px}}table{{border-collapse:collapse;width:100%}}th,td{{padding:8px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top}}th{{background:#eaf3fa;color:#005DAA;position:sticky;top:0}}.good{{color:#157347;font-weight:bold}}.bad{{color:#b42318;font-weight:bold}}.observe{{color:#9a6700;font-weight:bold}}</style></head><body>
+          <h1>Habegger Sandbox Search Audit</h1><p>Anonymous Item Search API test against {html.escape(BASE)}.</p>
+          <div class="cards">
+          <div class="card">Queries<b>{summary['queries']}</b></div><div class="card">Request errors<b>{summary['request_errors']}</b></div>
+          <div class="card">Zero-result rate<b>{pct(summary['zero_result_rate'])}</b></div><div class="card">Exact SKU top-1<b>{pct(summary['exact_sku_top_1_rate'])}</b></div>
+          <div class="card">Unprefixed SKU top-5<b>{pct(summary['unprefixed_top_5_rate'])}</b></div><div class="card">All expected items top-5<b>{pct(summary['all_expected_item_top_5_rate'])}</b></div>
+          <div class="card">Median latency<b>{summary['median_latency_ms']} ms</b></div><div class="card">P95 latency<b>{summary['p95_latency_ms']} ms</b></div></div>
+          <p><b>Storefront probe:</b> {html.escape(str(ui_probe))}</p>
+          <table><thead><tr><th>Status</th><th>Query</th><th>Type</th><th>Expected</th><th>Results</th><th>Rank</th><th>Top item</th><th>Top name</th><th>Top five names</th></tr></thead><tbody>{''.join(rows_html)}</tbody></table></body></html>'''
+          (OUT / 'dashboard.html').write_text(dashboard, encoding='utf-8')
+
+          print('\n=== SANDBOX SEARCH AUDIT SUMMARY ===')
+          print(json.dumps(summary, indent=2))
+          print('\n=== FAILURES / ZERO RESULTS ===')
+          for row in results:
+              if row['status'] in ('FAIL', 'ZERO_RESULTS', 'ERROR'):
+                  print(f"{row['status']}: {row['query']} | expected={row.get('expected_item') or row.get('expected_category')} | rank={row['expected_rank']} | total={row['total_results']} | top5={row['top_5_names']} | error={row['error']}")
+          PY
+
+      - name: Upload audit files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: habegger-sandbox-search-audit
+          path: audit-results/
+          retention-days: 14
